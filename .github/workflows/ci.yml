@@ -1,0 +1,42 @@
+name: Checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.21.0
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            tests/package-lock.json
+      - name: Generate isolated credentials and validate Compose
+        run: make setup config
+      - name: Build production and test images
+        run: make build frontend-test
+      - name: Start complete application
+        run: docker compose up -d --wait --wait-timeout 180
+      - name: Backend tests and code checks
+        run: make test analyse lint
+      - name: Browser end-to-end checks
+        run: |
+          cd tests
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+          node e2e.mjs
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --no-color --tail=150 app worker dispatcher migrate nginx
+      - name: Stop services
+        if: always()
+        run: docker compose down

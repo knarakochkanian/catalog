@@ -1,0 +1,137 @@
+name: product-import
+
+x-backend-environment: &backend-environment
+  APP_ENV: ${APP_ENV:-production}
+  APP_ORIGIN: ${APP_ORIGIN:-http://localhost:8080}
+  DATABASE_URL: postgresql://${POSTGRES_USER:-product_import}:${POSTGRES_PASSWORD:?Run make setup and set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-product_import}
+  MESSENGER_TRANSPORT_DSN: amqp://${RABBITMQ_USER:-product_import}:${RABBITMQ_PASSWORD:?Run make setup and set RABBITMQ_PASSWORD}@rabbitmq:5672/%2f/imports
+  STORAGE_PATH: /app/backend/var/storage
+  SESSION_SECURE: ${SESSION_SECURE:-0}
+  ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+  ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Run make setup and choose ADMIN_PASSWORD}
+
+x-backend: &backend
+  image: product-import-app:local
+  build:
+    context: .
+    target: app
+  environment: *backend-environment
+  volumes:
+    - storage:/app/backend/var/storage
+  init: true
+  restart: unless-stopped
+
+x-ready-dependencies: &ready-dependencies
+  db:
+    condition: service_healthy
+  rabbitmq:
+    condition: service_healthy
+  migrate:
+    condition: service_completed_successfully
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-product_import}
+      POSTGRES_USER: ${POSTGRES_USER:-product_import}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run make setup and set POSTGRES_PASSWORD}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:4.3.6-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-product_import}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Run make setup and set RABBITMQ_PASSWORD}
+    volumes:
+      - rabbitmq:/var/lib/rabbitmq
+    healthcheck:
+      test: [CMD, rabbitmq-diagnostics, -q, ping]
+      interval: 5s
+      timeout: 10s
+      retries: 18
+      start_period: 20s
+    restart: unless-stopped
+
+  migrate:
+    <<: *backend
+    command: [php, bin/migrate.php]
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  app:
+    <<: *backend
+    depends_on: *ready-dependencies
+    healthcheck:
+      # nginx waits for service_started, so the HTTP check has no dependency cycle.
+      test: [CMD-SHELL, 'curl -fsS http://nginx/api/health | php -r ''$$data = json_decode(stream_get_contents(STDIN), true); exit(($$data["status"] ?? null) === "ok" ? 0 : 1);''']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  worker:
+    <<: *backend
+    command: [php, -d, memory_limit=512M, bin/worker.php]
+    depends_on: *ready-dependencies
+    stop_signal: SIGTERM
+    stop_grace_period: 60s
+
+  dispatcher:
+    <<: *backend
+    command: [php, -d, memory_limit=512M, bin/dispatch.php]
+    depends_on: *ready-dependencies
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+
+  nginx:
+    image: product-import-nginx:local
+    build:
+      context: .
+      target: nginx
+    ports:
+      - 127.0.0.1:${HTTP_PORT:-8080}:80
+    depends_on:
+      app:
+        condition: service_started
+    healthcheck:
+      test: [CMD, curl, -fsS, http://127.0.0.1/api/health]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+  tests:
+    profiles: [test]
+    image: product-import-tests:local
+    build:
+      context: .
+      target: dev-test
+    environment:
+      <<: *backend-environment
+      APP_ENV: test
+      TEST_DATABASE_URL: postgresql://${POSTGRES_USER:-product_import}:${POSTGRES_PASSWORD:?Run make setup}@db:5432/${POSTGRES_DB:-product_import}
+    init: true
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+volumes:
+  postgres:
+  rabbitmq:
+  storage:

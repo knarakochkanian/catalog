@@ -1,0 +1,211 @@
+<div class="page-heading">
+  <div>
+    <div class="eyebrow">КАТАЛОГ / ИМПОРТ</div>
+    <h1>Импорт товаров</h1>
+    <p class="text-muted">Добавьте или обновите товары из Excel-файла.</p>
+  </div>
+  <a routerLink="/products" class="btn btn-outline-secondary">← К товарам</a>
+</div>
+<div class="import-layout">
+  <section class="surface upload-panel">
+    <div class="section-number">01</div>
+    <h2>Выберите файл</h2>
+    <p class="text-muted">Один Excel-файл, до 10 МБ и 10 000 строк.</p>
+    <label
+      class="upload-zone"
+      [class.has-file]="file()"
+      [class.is-disabled]="busy()"
+      for="import-file"
+    >
+      <span class="upload-icon"
+        ><svg viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            d="M12 16V3m-5 5 5-5 5 5M4 15v5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5"
+          /></svg
+      ></span>
+      <strong>{{ file()?.name || "Выберите Excel-файл" }}</strong>
+      <span>{{
+        file()
+          ? (file()!.size / 1024 | number: "1.0-0") + " КБ · .xlsx"
+          : "Формат .xlsx"
+      }}</span>
+      <span class="btn btn-outline-secondary">{{
+        file() ? "Выбрать другой файл" : "Выбрать файл"
+      }}</span>
+      <input
+        id="import-file"
+        class="visually-hidden"
+        type="file"
+        accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        (change)="selectFile($event)"
+        [disabled]="busy()"
+      />
+    </label>
+    @if (fileError()) {
+      <p class="field-error" role="alert">{{ fileError() }}</p>
+    }
+    <button
+      class="btn btn-primary import-submit"
+      type="button"
+      (click)="startImport()"
+      [disabled]="!file() || busy()"
+    >
+      {{
+        uploading()
+          ? "Загружаем файл…"
+          : polling()
+            ? "Импорт выполняется…"
+            : "Начать импорт"
+      }}
+      <span aria-hidden="true">→</span>
+    </button>
+    @if (requestError()) {
+      <div class="alert alert-danger mt-3" role="alert">
+        {{ requestError() }}
+        @if (job()) {
+          <button
+            class="btn btn-outline-danger btn-sm mt-2 d-block"
+            type="button"
+            (click)="retryStatus()"
+          >
+            Повторить проверку статуса
+          </button>
+        }
+      </div>
+    }
+  </section>
+  <aside class="surface format-panel">
+    <div class="section-number muted">i</div>
+    <h2>Перед загрузкой</h2>
+    <p>Файл должен содержать один непустой лист с заголовками:</p>
+    <ul class="requirements-list">
+      <li>Внешний код</li>
+      <li>Наименование</li>
+      <li>Цена: Цена продажи</li>
+      <li>Закупочная цена</li>
+    </ul>
+    <hr />
+    <p>
+      Товары с существующим внешним кодом обновятся. Атрибуты и изображения
+      успешной строки будут заменены.
+    </p>
+    <div class="information-note">
+      Ошибки отдельных строк не останавливают импорт. Их можно проверить в
+      отчёте ниже.
+    </div>
+  </aside>
+</div>
+@if (job(); as currentJob) {
+  <section class="surface import-report" aria-live="polite">
+    <div class="panel-title">
+      <div>
+        <span class="eyebrow">РЕЗУЛЬТАТ ИМПОРТА</span>
+        <h2>
+          {{
+            currentJob.status === "completed"
+              ? "Импорт завершён"
+              : currentJob.status === "failed"
+                ? "Задание не выполнено"
+                : "Обработка файла"
+          }}
+        </h2>
+      </div>
+      <span
+        class="status-badge"
+        [class.success]="currentJob.status === 'completed'"
+        [class.danger]="currentJob.status === 'failed'"
+        >{{ labels[currentJob.status] }}</span
+      >
+    </div>
+    <div class="report-body">
+      @if (currentJob.message) {
+        <div
+          class="alert"
+          [class.alert-danger]="currentJob.status === 'failed'"
+          [class.alert-info]="currentJob.status !== 'failed'"
+        >
+          {{ currentJob.message }}
+        </div>
+      }
+      <div class="progress-description">
+        <span>{{
+          currentJob.status === "queued"
+            ? "Ожидаем начала обработки"
+            : "Обработано строк: " +
+              currentJob.processed +
+              " из " +
+              currentJob.total
+        }}</span
+        ><strong>{{ progress() }}%</strong>
+      </div>
+      <div
+        class="progress"
+        role="progressbar"
+        aria-label="Обработка строк"
+        [attr.aria-valuenow]="progress()"
+        aria-valuemin="0"
+        aria-valuemax="100"
+      >
+        <div class="progress-bar" [style.width.%]="progress()"></div>
+      </div>
+      <div class="report-metrics">
+        <div>
+          <span>Всего строк</span
+          ><strong>{{ currentJob.total | number }}</strong>
+        </div>
+        <div>
+          <span>Создано</span><strong>{{ currentJob.created | number }}</strong>
+        </div>
+        <div>
+          <span>Обновлено</span
+          ><strong>{{ currentJob.updated | number }}</strong>
+        </div>
+        <div class="skipped-metric">
+          <span>Пропущено</span
+          ><strong>{{ currentJob.skipped | number }}</strong>
+        </div>
+      </div>
+      @if (currentJob.status === "completed") {
+        <div class="report-complete">
+          <span>{{
+            currentJob.skipped
+              ? "Проверьте ошибки пропущенных строк перед повторным импортом."
+              : "Все строки обработаны. Товары доступны в каталоге."
+          }}</span
+          ><a routerLink="/products" class="btn btn-primary"
+            >Открыть каталог →</a
+          >
+        </div>
+      }
+      @if (currentJob.errors.length) {
+        <div class="row-errors">
+          <h3>
+            Ошибки строк
+            <span class="count-badge">{{ currentJob.errors.length }}</span>
+          </h3>
+          <div class="table-responsive">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th scope="col">Лист</th>
+                  <th scope="col">Строка</th>
+                  <th scope="col">Причина</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (rowError of currentJob.errors; track $index) {
+                  <tr>
+                    <td>{{ rowError.sheet }}</td>
+                    <td>{{ rowError.row }}</td>
+                    <td>{{ rowError.message }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        </div>
+      }
+      <p class="job-id">Задание {{ currentJob.id }}</p>
+    </div>
+  </section>
+}

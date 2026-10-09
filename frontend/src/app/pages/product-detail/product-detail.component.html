@@ -1,0 +1,141 @@
+<a routerLink="/products" class="back-link">← К списку товаров</a>
+@if (view$ | async; as view) {
+  @if (view.loading) {
+    <section class="surface state-box" role="status">
+      <span class="spinner-border text-primary" aria-hidden="true"></span>
+      <h2>Загружаем карточку товара…</h2>
+    </section>
+  } @else if (view.error) {
+    <section class="surface state-box">
+      <div class="state-symbol error-symbol">!</div>
+      <h1>Карточка недоступна</h1>
+      <p role="alert">{{ view.error }}</p>
+      <a routerLink="/products" class="btn btn-primary">Вернуться к товарам</a>
+    </section>
+  } @else if (view.product; as product) {
+    <div class="page-heading detail-heading">
+      <div>
+        <span class="eyebrow">КАРТОЧКА ТОВАРА</span>
+        <h1>{{ product.name }}</h1>
+        <p class="text-muted">
+          Внешний код:
+          <span class="code-text">{{ product.external_code }}</span>
+        </p>
+      </div>
+    </div>
+    <div class="detail-grid">
+      <section class="surface product-gallery" aria-label="Изображения товара">
+        @if (product.images.length) {
+          @for (image of product.images; track image.id) {
+            <figure>
+              <button
+                #imageButton
+                type="button"
+                class="gallery-image-button"
+                [attr.aria-label]="'Увеличить фото ' + ($index + 1)"
+                aria-haspopup="dialog"
+                (click)="openImage(image, product.name, $index + 1, imageButton)"
+              >
+                <img
+                  [src]="image.path"
+                  [alt]="product.name + ', фото ' + ($index + 1)"
+                  loading="lazy"
+                />
+                <span class="gallery-image-hint" aria-hidden="true">
+                  <svg viewBox="0 0 24 24">
+                    <path d="M8 3H3v5M16 3h5v5M21 16v5h-5M8 21H3v-5" />
+                  </svg>
+                  Увеличить
+                </span>
+              </button>
+              <figcaption>Фото {{ $index + 1 }}</figcaption>
+            </figure>
+          }
+        } @else {
+          <div class="gallery-empty">
+            <span class="state-symbol">▧</span>
+            <p>Изображения не добавлены</p>
+          </div>
+        }
+      </section>
+      <div class="detail-information">
+        <section class="surface price-panel">
+          <h2>Цены</h2>
+          <div class="main-price">
+            <span>Цена продажи</span
+            ><strong>{{ product.price | number: "1.2-2" }}</strong>
+          </div>
+          <div class="price-secondary">
+            <div>
+              <span>Закупочная цена</span
+              ><strong>{{ product.purchase_price | number: "1.2-2" }}</strong>
+            </div>
+            <div>
+              <span>Скидка</span
+              ><strong>{{ product.discount | number: "1.0-4" }}%</strong>
+            </div>
+          </div>
+        </section>
+        <section class="surface description-panel">
+          <h2>Описание</h2>
+          <p
+            class="product-description"
+            [class.text-muted]="!product.description"
+          >
+            {{ product.description || "Описание не добавлено." }}
+          </p>
+        </section>
+      </div>
+    </div>
+    <section class="surface attributes-panel">
+      <div class="panel-title">
+        <h2>Характеристики</h2>
+        <span class="count-badge">{{ product.attributes.length }}</span>
+      </div>
+      @if (product.attributes.length) {
+        <dl class="attributes-list">
+          @for (attribute of product.attributes; track attribute.id) {
+            <div>
+              <dt>{{ attribute.key }}</dt>
+              <dd>{{ attribute.value }}</dd>
+            </div>
+          }
+        </dl>
+      } @else {
+        <p class="empty-attributes text-muted">
+          Дополнительные поля не добавлены.
+        </p>
+      }
+    </section>
+  }
+}
+
+<dialog
+  #imageDialog
+  class="product-image-viewer"
+  aria-labelledby="product-image-viewer-title"
+  (close)="onImageClosed()"
+  (pointerdown)="onViewerPointerDown($event)"
+  (click)="onViewerClick($event)"
+  (keydown)="onViewerKeydown($event)"
+>
+  <div class="image-viewer-header">
+    <h2 id="product-image-viewer-title">Фото {{ selectedImage()?.number }}</h2>
+    <button
+      type="button"
+      class="image-viewer-close"
+      autofocus
+      (click)="closeImage()"
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="m6 6 12 12M18 6 6 18" />
+      </svg>
+      Закрыть фото
+    </button>
+  </div>
+  <div class="image-viewer-frame">
+    @if (selectedImage(); as image) {
+      <img class="image-viewer-image" [src]="image.path" [alt]="image.alt" />
+    }
+  </div>
+</dialog>

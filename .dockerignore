@@ -1,0 +1,17 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+backend/vendor
+backend/var
+frontend/node_modules
+frontend/dist
+frontend/.angular
+frontend/coverage
+tests/node_modules
+tests/test-results
+tests/playwright-report
+work
+**/.DS_Store
+**/*.log

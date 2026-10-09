@@ -1,0 +1,440 @@
+openapi: 3.0.3
+info:
+  title: Product Import API
+  version: 1.0.0
+  description: |
+    Same-origin API for authenticated XLSX import, product browsing and XLSX export.
+    Decimal money and discount fields are strings to preserve precision.
+    Session cookies authenticate protected requests. Unsafe requests require the
+    X-CSRF-Token header returned by the session endpoint, including login.
+    Login also validates the browser Origin. Product changes happen through
+    imports; there are no separate product mutation endpoints.
+servers:
+  - url: http://localhost:8080
+    description: Local Docker application
+security:
+  - SessionCookie: []
+tags:
+  - name: Authentication
+  - name: Imports
+  - name: Products
+  - name: Images
+  - name: Health
+paths:
+  /api/auth/session:
+    get:
+      tags: [Authentication]
+      summary: Read authentication state and obtain a CSRF token
+      operationId: getSession
+      security: []
+      responses:
+        '200':
+          description: Authenticated or anonymous session; username appears when authenticated
+          headers:
+            Cache-Control:
+              schema: {type: string, example: no-store}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Session'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/auth/login:
+    post:
+      tags: [Authentication]
+      summary: Authenticate with the configured account
+      operationId: login
+      security: []
+      description: |
+        Login requires a trusted same-origin browser request. On success the
+        session identifier is regenerated and a new CSRF token is returned.
+        Call GET /api/auth/session first to obtain an anonymous session and token.
+      parameters:
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [username, password]
+              properties:
+                username: {type: string, minLength: 1, maxLength: 100}
+                password: {type: string, minLength: 1, format: password}
+      responses:
+        '200':
+          description: Authenticated session
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Session'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/auth/logout:
+    post:
+      tags: [Authentication]
+      summary: End the current authenticated session
+      operationId: logout
+      parameters:
+        - {$ref: '#/components/parameters/CsrfToken'}
+      responses:
+        '204': {description: Session invalidated and cookie expired}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/imports:
+    post:
+      tags: [Imports]
+      summary: Queue an XLSX import
+      operationId: createImport
+      description: |
+        Accepts one XLSX file up to 10 MiB with one nonempty worksheet, up to
+        10,000 data rows and 200 columns. Required headers are Внешний код,
+        Наименование, Цена: Цена продажи and Закупочная цена. Описание is optional.
+        Headers beginning with Доп. поле: define text attributes. Formulas are
+        rejected. Invalid rows are reported without stopping the import.
+
+        Products are upserted by external_code. A successful row atomically
+        replaces its attributes and images; any image failure skips the complete
+        row and preserves an existing product. Later successful duplicate rows
+        replace earlier ones. Remote image URLs must resolve to public HTTP(S)
+        destinations; redirects are rejected. Import rate limits apply per user.
+      parameters:
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: XLSX workbook; original client filename is not used as a storage path
+      responses:
+        '202':
+          description: Import accepted for background processing
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, status]
+                properties:
+                  id: {$ref: '#/components/schemas/ImportId'}
+                  status: {type: string, enum: [queued]}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+        '422': {$ref: '#/components/responses/ValidationError'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /api/imports/{id}:
+    get:
+      tags: [Imports]
+      summary: Read import progress and row errors
+      operationId: getImport
+      description: |
+        Only the submitting user can read this import. Polling should stop when
+        status becomes completed or failed. A completed import can include skipped
+        rows and row errors; failed describes a job-level failure.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: {$ref: '#/components/schemas/ImportId'}
+      responses:
+        '200':
+          description: Current durable import state
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ImportStatus'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/products:
+    get:
+      tags: [Products]
+      summary: List products with server pagination and filters
+      operationId: listProducts
+      parameters:
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1, default: 1}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+        - name: name
+          in: query
+          description: Case-insensitive name substring
+          schema: {type: string, maxLength: 255}
+        - name: min_price
+          in: query
+          description: Inclusive lower sale-price bound
+          schema: {$ref: '#/components/schemas/PriceFilter'}
+        - name: max_price
+          in: query
+          description: Inclusive upper sale-price bound; must not be below min_price
+          schema: {$ref: '#/components/schemas/PriceFilter'}
+      responses:
+        '200':
+          description: Requested page; total counts all matching products
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page, limit, total, total_pages]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: '#/components/schemas/Product'}
+                  page: {type: integer, minimum: 1}
+                  limit: {type: integer, minimum: 1, maximum: 100}
+                  total: {type: integer, minimum: 0}
+                  total_pages: {type: integer, minimum: 0}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '422': {$ref: '#/components/responses/ValidationError'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/products/export:
+    get:
+      tags: [Products]
+      summary: Export all products as a re-importable XLSX workbook
+      operationId: exportProducts
+      description: |
+        Exports the complete stored collection, not just the current page, up to
+        10,000 products. Columns contain external code, name, description, sale
+        price, purchase price, discount, and sorted Доп. поле: attributes including
+        original photo URLs. Text is written as explicit string cells; prices are
+        numeric. The export preserves the agreed product model rather than every
+        unrelated column of an uploaded source workbook.
+      responses:
+        '200':
+          description: XLSX workbook
+          headers:
+            Content-Disposition:
+              schema: {type: string, example: 'attachment; filename="products.xlsx"'}
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema: {type: string, format: binary}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '422': {$ref: '#/components/responses/ValidationError'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/products/{id}:
+    get:
+      tags: [Products]
+      summary: Read one product with attributes and image references
+      operationId: getProduct
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: {type: integer, minimum: 1}
+      responses:
+        '200':
+          description: Product detail
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Product'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/images/{filename}:
+    get:
+      tags: [Images]
+      summary: Read a stored product image through authentication
+      operationId: getImage
+      description: |
+        Use the path returned in ProductImage. Storage is private and never
+        mounted into nginx. The backend accepts a safe basename, validates its
+        associated database image record, and serves the validated image MIME.
+      parameters:
+        - name: filename
+          in: path
+          required: true
+          schema: {type: string, pattern: '^[A-Za-z0-9_-]+\.(jpg|jpeg|png|webp|gif)$'}
+      responses:
+        '200':
+          description: Validated image bytes
+          headers:
+            X-Content-Type-Options:
+              schema: {type: string, example: nosniff}
+            Cache-Control:
+              schema: {type: string, example: 'private, max-age=3600'}
+          content:
+            image/jpeg: {schema: {type: string, format: binary}}
+            image/png: {schema: {type: string, format: binary}}
+            image/webp: {schema: {type: string, format: binary}}
+            image/gif: {schema: {type: string, format: binary}}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/health:
+    get:
+      tags: [Health]
+      summary: Check application readiness
+      operationId: getHealth
+      security: []
+      responses:
+        '200':
+          description: Application ready
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: {type: string, enum: [ok]}
+        '503': {$ref: '#/components/responses/Unavailable'}
+components:
+  securitySchemes:
+    SessionCookie:
+      type: apiKey
+      in: cookie
+      name: PHPSESSID
+      description: HttpOnly, SameSite=Lax session cookie; Secure under HTTPS; 30-minute idle and one-hour absolute expiry
+  parameters:
+    CsrfToken:
+      name: X-CSRF-Token
+      in: header
+      required: true
+      description: Session-bound token from GET /api/auth/session or successful login
+      schema: {type: string, minLength: 1}
+  schemas:
+    Session:
+      type: object
+      required: [authenticated, csrf_token]
+      properties:
+        authenticated: {type: boolean}
+        username: {type: string}
+        csrf_token: {type: string}
+    ImportId:
+      type: string
+      description: Opaque server-generated import identifier
+      minLength: 1
+    ImportStatus:
+      type: object
+      required: [id, status, total, processed, created, updated, skipped, errors]
+      properties:
+        id: {$ref: '#/components/schemas/ImportId'}
+        status: {type: string, enum: [queued, processing, completed, failed]}
+        total: {type: integer, minimum: 0, description: Total data rows excluding the header}
+        processed: {type: integer, minimum: 0}
+        created: {type: integer, minimum: 0}
+        updated: {type: integer, minimum: 0}
+        skipped: {type: integer, minimum: 0}
+        errors:
+          type: array
+          items: {$ref: '#/components/schemas/ImportRowError'}
+        message: {type: string, nullable: true, description: Optional job-level diagnostic}
+    ImportRowError:
+      type: object
+      required: [sheet, row, message]
+      properties:
+        sheet: {type: string}
+        row: {type: integer, minimum: 1, description: Original 1-based worksheet row}
+        message: {type: string}
+    PriceFilter:
+      type: string
+      pattern: '^\d{1,12}(\.\d{1,2})?$'
+      example: '199.90'
+    Product:
+      type: object
+      required: [id, external_code, name, description, price, purchase_price, discount, attributes, images]
+      properties:
+        id: {type: integer, minimum: 1}
+        external_code: {type: string, description: Unique text identifier; leading zeros are preserved}
+        name: {type: string}
+        description: {type: string}
+        price: {type: string, pattern: '^\d{1,12}\.\d{2}$', example: '199.90'}
+        purchase_price: {type: string, pattern: '^\d{1,12}\.\d{2}$', example: '149.90'}
+        discount:
+          type: string
+          pattern: '^-?\d{1,12}\.\d{4}$'
+          description: Percentage derived from purchase and sale prices; can be negative
+          example: '25.0125'
+        attributes:
+          type: array
+          items: {$ref: '#/components/schemas/ProductAttribute'}
+        images:
+          type: array
+          maxItems: 10
+          items: {$ref: '#/components/schemas/ProductImage'}
+    ProductAttribute:
+      type: object
+      required: [id, key, value]
+      properties:
+        id: {type: integer, minimum: 1}
+        key: {type: string}
+        value: {type: string}
+    ProductImage:
+      type: object
+      required: [id, url, path]
+      properties:
+        id: {type: integer, minimum: 1}
+        url: {type: string, format: uri, description: Original public HTTP(S) image URL}
+        path: {type: string, pattern: '^/api/images/', description: Authenticated local image URL}
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: {type: string, description: Stable machine-readable error code}
+            message: {type: string, description: Safe user-readable explanation}
+            details: {description: Optional validation details; never contains a stack trace or credentials}
+  responses:
+    BadRequest:
+      description: Malformed request or invalid parameters
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Unauthenticated:
+      description: Missing/expired session or invalid login credentials
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Forbidden:
+      description: Invalid CSRF token or untrusted request origin
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    NotFound:
+      description: Resource not found or unavailable to the current user
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    PayloadTooLarge:
+      description: Upload exceeds the configured size limit
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    ValidationError:
+      description: Request data or workbook structure violates the accepted format
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    TooManyRequests:
+      description: Per-user request limit reached
+      headers:
+        Retry-After:
+          schema: {type: integer, minimum: 1, description: Seconds until retry is appropriate}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    InternalError:
+      description: Unexpected server error; internal diagnostics are logged privately
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Unavailable:
+      description: A required service is temporarily unavailable
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}

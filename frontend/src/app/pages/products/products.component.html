@@ -1,0 +1,266 @@
+@if (filtersChanged$ | async) {}
+@if (view$ | async; as view) {
+  @if (exportState$ | async; as exportState) {
+    <div class="page-heading">
+      <div>
+        <div class="eyebrow">КАТАЛОГ</div>
+        <h1>
+          Товары <span class="count-badge">{{ view.total | number }}</span>
+        </h1>
+        <p class="text-muted">Весь ассортимент в одном месте.</p>
+      </div>
+      <div class="heading-actions">
+        <button
+          type="button"
+          class="btn btn-outline-secondary"
+          (click)="export()"
+          [disabled]="exportState.loading"
+        >
+          {{ exportState.loading ? "Готовим файл…" : "Экспорт XLSX" }}</button
+        ><a routerLink="/import" class="btn btn-primary"
+          ><span aria-hidden="true">＋</span> Импорт товаров</a
+        >
+      </div>
+    </div>
+    @if (exportState.error) {
+      <div class="alert alert-danger" role="alert">{{ exportState.error }}</div>
+    }
+  }
+  <section class="surface filter-panel" aria-label="Фильтры товаров">
+    <form [formGroup]="filters" class="filter-grid">
+      <div class="search-field">
+        <label for="search" class="form-label">Поиск по названию</label>
+        <div class="input-icon">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="10.5" cy="10.5" r="6.5" />
+            <path d="m16 16 5 5" /></svg
+          ><input
+            id="search"
+            class="form-control"
+            type="search"
+            placeholder="Найти товар…"
+            formControlName="name"
+          />
+        </div>
+      </div>
+      <div>
+        <label for="min-price" class="form-label">Цена от</label
+        ><input
+          id="min-price"
+          class="form-control"
+          type="text"
+          inputmode="decimal"
+          placeholder="0,00"
+          formControlName="minPrice"
+          [attr.aria-invalid]="
+            filters.controls.minPrice.invalid || filters.hasError('priceRange')
+          "
+        />
+      </div>
+      <div>
+        <label for="max-price" class="form-label">Цена до</label
+        ><input
+          id="max-price"
+          class="form-control"
+          type="text"
+          inputmode="decimal"
+          placeholder="Без ограничения"
+          formControlName="maxPrice"
+          [attr.aria-invalid]="
+            filters.controls.maxPrice.invalid || filters.hasError('priceRange')
+          "
+        />
+      </div>
+      <button
+        type="button"
+        class="btn btn-quiet reset-filter"
+        (click)="resetFilters()"
+      >
+        Сбросить
+      </button>
+    </form>
+    @if (filters.invalid) {
+      <p class="field-error" role="alert">
+        Укажите неотрицательные цены с двумя знаками после запятой. Цена «от»
+        должна быть не больше цены «до».
+      </p>
+    }
+  </section>
+  <section class="surface catalog-panel" [attr.aria-busy]="view.loading">
+    <div class="panel-title">
+      <h2>Список товаров</h2>
+      <button
+        type="button"
+        class="btn btn-quiet btn-sm"
+        (click)="reload()"
+        [disabled]="view.loading || filters.invalid"
+      >
+        {{ view.loading ? "Загрузка…" : "Обновить" }}
+      </button>
+    </div>
+    @if (view.loading) {
+      <div class="loading-bar" role="status">
+        <span></span><span class="visually-hidden">Загружаем товары</span>
+      </div>
+    }
+    @if (view.error) {
+      <div class="state-box">
+        <div class="state-symbol error-symbol">!</div>
+        <h3>Не удалось загрузить товары</h3>
+        <p>{{ view.error }}</p>
+        <button class="btn btn-primary" type="button" (click)="reload()">
+          Повторить
+        </button>
+      </div>
+    } @else if (!view.items.length && !view.loading) {
+      <div class="state-box">
+        <div class="state-symbol">▦</div>
+        <h3>
+          {{
+            view.query.name || view.query.min_price || view.query.max_price
+              ? "Товары не найдены"
+              : "В каталоге пока нет товаров"
+          }}
+        </h3>
+        <p>
+          {{
+            view.query.name || view.query.min_price || view.query.max_price
+              ? "Попробуйте изменить название или диапазон цен."
+              : "Загрузите Excel-файл, чтобы добавить первые товары."
+          }}
+        </p>
+        @if (view.query.name || view.query.min_price || view.query.max_price) {
+          <button
+            type="button"
+            class="btn btn-outline-secondary"
+            (click)="resetFilters()"
+          >
+            Сбросить фильтры
+          </button>
+        } @else {
+          <a routerLink="/import" class="btn btn-primary"
+            >Импортировать товары</a
+          >
+        }
+      </div>
+    } @else if (!view.items.length) {
+      <div class="table-skeleton" aria-hidden="true">
+        @for (row of [1, 2, 3, 4, 5]; track row) {
+          <div><span></span><span></span><span></span></div>
+        }
+      </div>
+    } @else {
+      @if (isMobile$ | async) {
+        <div class="mobile-products">
+          @for (product of view.items; track product.id) {
+            <a class="mobile-product" [routerLink]="['/products', product.id]"
+              ><div>
+                <strong>{{ product.name }}</strong
+                ><span class="code-text">{{ product.external_code }}</span>
+              </div>
+              <div class="mobile-product-bottom">
+                <span class="price-text">{{
+                  product.price | number: "1.2-2"
+                }}</span
+                ><span class="discount-badge"
+                  >Скидка {{ product.discount | number: "1.0-2" }}%</span
+                ><span aria-hidden="true">→</span>
+              </div></a
+            >
+          }
+        </div>
+      } @else {
+        <div class="table-responsive desktop-table">
+          <table class="table product-table">
+            <thead>
+              <tr>
+                <th scope="col">Товар</th>
+                <th scope="col">Внешний код</th>
+                <th scope="col" class="text-end">Цена продажи</th>
+                <th scope="col" class="text-end">Скидка</th>
+                <th scope="col">
+                  <span class="visually-hidden">Карточка</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (product of view.items; track product.id) {
+                <tr>
+                  <td>
+                    <a
+                      class="product-title"
+                      [routerLink]="['/products', product.id]"
+                    >
+                      @if (product.images[0]; as image) {
+                        <img
+                          class="product-thumb"
+                          [src]="image.path"
+                          alt=""
+                          loading="lazy"
+                        />
+                      } @else {
+                        <span
+                          class="product-thumb image-placeholder"
+                          aria-hidden="true"
+                          >▧</span
+                        >
+                      }
+                      <span>{{ product.name }}</span></a
+                    >
+                  </td>
+                  <td>
+                    <span class="code-text">{{ product.external_code }}</span>
+                  </td>
+                  <td class="text-end price-text">
+                    {{ product.price | number: "1.2-2" }}
+                  </td>
+                  <td class="text-end">
+                    <span class="discount-badge"
+                      >{{ product.discount | number: "1.0-2" }}%</span
+                    >
+                  </td>
+                  <td>
+                    <a
+                      [routerLink]="['/products', product.id]"
+                      class="row-arrow"
+                      [attr.aria-label]="'Открыть ' + product.name"
+                      >→</a
+                    >
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+      <footer class="table-footer">
+        <span
+          >{{ (view.page - 1) * view.query.limit + 1 }}–{{
+            (view.page - 1) * view.query.limit + view.items.length
+          }}
+          из {{ view.total | number }}</span
+        >
+        <nav class="pagination-controls" aria-label="Страницы каталога">
+          <button
+            type="button"
+            class="btn btn-outline-secondary btn-sm"
+            (click)="goToPage(view.page - 1)"
+            [disabled]="view.page <= 1 || view.loading || filters.invalid"
+          >
+            ← <span class="pagination-word">Назад</span></button
+          ><span>Страница {{ view.page }} из {{ view.totalPages }}</span
+          ><button
+            type="button"
+            class="btn btn-outline-secondary btn-sm"
+            (click)="goToPage(view.page + 1)"
+            [disabled]="
+              view.page >= view.totalPages || view.loading || filters.invalid
+            "
+          >
+            <span class="pagination-word">Далее</span> →
+          </button>
+        </nav>
+      </footer>
+    }
+  </section>
+}
